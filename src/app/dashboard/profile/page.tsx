@@ -21,7 +21,7 @@ import Image from "next/image";
 type MobileStep = "idle" | "editing" | "otp";
 
 export default function ProfilePage() {
-  const { isLoading: sessionLoading } = useCurrentUser();
+  const { isLoading: sessionLoading, update } = useCurrentUser();
 
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
@@ -88,6 +88,7 @@ export default function ProfilePage() {
       }
 
       setNameMessage({ type: "success", text: "Name updated successfully." });
+      await update({ name: name.trim() });
     } catch (error) {
       setNameMessage({ type: "error", text: "Unable to save changes." });
     } finally {
@@ -170,6 +171,8 @@ export default function ProfilePage() {
       setOtp("");
       setNewMobile("");
       setMobileMessage({ type: "success", text: "Mobile number updated." });
+      await update({ mobile: newMobile });
+      setNewMobile("");
     } catch (error) {
       setMobileMessage({ type: "error", text: "Unable to verify OTP." });
     } finally {

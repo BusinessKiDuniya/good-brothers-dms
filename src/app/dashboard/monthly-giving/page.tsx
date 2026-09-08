@@ -23,10 +23,31 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+declare global {
+  interface Window {
+    Razorpay: any;
+  }
+}
+
+function loadRazorpayScript(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (document.getElementById("razorpay-checkout-js")) {
+      resolve(true);
+      return;
+    }
+    const script = document.createElement("script");
+    script.id = "razorpay-checkout-js";
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
+
 type Subscription = {
   amount: number;
-  status: "ACTIVE" | "PAUSED" | "CANCELLED";
-  startedAt: string;
+  status: "CREATED" | "ACTIVE" | "PAUSED" | "HALTED";
+  startedAt: string | null;
   nextPaymentDate: string | null;
   razorpaySubscriptionId: string | null;
 };
@@ -46,9 +67,6 @@ export default function MonthlyGivingPage() {
       const response = await axios.get("/api/subscription");
       if (response.data?.success) {
         setSub(response.data.subscription);
-        if (response.data.subscription) {
-          setAmountInput(String(response.data.subscription.amount));
-        }
       }
     } catch (error) {
       console.error("Failed to load subscription:", error);
@@ -57,36 +75,30 @@ export default function MonthlyGivingPage() {
     }
   }
 
+  async function fetchSubscription(): Promise<Subscription | null> {
+    try {
+      const response = await axios.get("/api/subscription");
+
+      if (response.data?.success) {
+        return response.data.subscription;
+      }
+
+      return null;
+    } catch (error) {
+      console.error("Failed to load subscription:", error);
+      return null;
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
 
-    async function fetchSubscription() {
-      try {
-        const response = await axios.get("/api/subscription");
+    fetchSubscription().then((subscription) => {
+      if (cancelled) return;
 
-        if (cancelled) return;
-
-        if (response.data?.success) {
-          const subscription = response.data.subscription;
-
-          setSub(subscription);
-
-          if (subscription) {
-            setAmountInput(String(subscription.amount));
-          }
-        }
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Failed to load subscription:", error);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    }
-
-    fetchSubscription();
+      setSub(subscription);
+      setLoading(false);
+    });
 
     return () => {
       cancelled = true;
@@ -104,16 +116,63 @@ export default function MonthlyGivingPage() {
     setMessage(null);
 
     try {
-      const response = await axios.post("/api/subscription", { amount });
+      const scriptLoaded = await loadRazorpayScript();
+      if (!scriptLoaded) {
+        setMessage({ type: "error", text: "Unable to load payment gateway." });
+        setActionLoading(false);
+        return;
+      }
+
+      const response = await axios.post("/api/subscription/create", { amount });
+
       if (!response.data?.success) {
         setMessage({
           type: "error",
           text: response.data?.message || "Unable to start monthly giving.",
         });
+        setActionLoading(false);
         return;
       }
-      setSub(response.data.subscription);
-      setMessage({ type: "success", text: "Monthly giving started!" });
+
+      const { subscriptionId, keyId, name, email, contact } = response.data;
+
+      const options = {
+        key: keyId,
+        subscription_id: subscriptionId,
+        name: "Good Brothers Trust",
+        description: "Monthly Giving",
+        prefill: { name, email, contact },
+        theme: { color: "#166534" },
+        handler: async function (resp: any) {
+          try {
+            await axios.post("/api/subscription/verify", {
+              razorpay_payment_id: resp.razorpay_payment_id,
+              razorpay_subscription_id: resp.razorpay_subscription_id,
+              razorpay_signature: resp.razorpay_signature,
+            });
+          } finally {
+            await load();
+            setMessage({ type: "success", text: "Monthly giving started!" });
+            setActionLoading(false);
+          }
+        },
+        modal: {
+          ondismiss: function () {
+            setActionLoading(false);
+            setMessage({ type: "error", text: "Setup cancelled." });
+          },
+        },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.on("payment.failed", function () {
+        setActionLoading(false);
+        setMessage({
+          type: "error",
+          text: "Authorization failed. Please try again.",
+        });
+      });
+      rzp.open();
     } catch (error) {
       if (axios.isAxiosError(error)) {
         setMessage({
@@ -124,35 +183,6 @@ export default function MonthlyGivingPage() {
       } else {
         setMessage({ type: "error", text: "Unable to start monthly giving." });
       }
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
-  async function updateAmount() {
-    const amount = Number(amountInput);
-    if (!Number.isFinite(amount) || amount < 100) {
-      setMessage({ type: "error", text: "Minimum monthly amount is ₹100." });
-      return;
-    }
-
-    setActionLoading(true);
-    setMessage(null);
-
-    try {
-      const response = await axios.patch("/api/subscription", { amount });
-      if (!response.data?.success) {
-        setMessage({
-          type: "error",
-          text: response.data?.message || "Unable to update amount.",
-        });
-        return;
-      }
-      setSub(response.data.subscription);
-      setMessage({ type: "success", text: "Amount updated." });
-    } catch (error) {
-      setMessage({ type: "error", text: "Unable to update amount." });
-    } finally {
       setActionLoading(false);
     }
   }
@@ -160,7 +190,6 @@ export default function MonthlyGivingPage() {
   async function toggleActive() {
     setActionLoading(true);
     setMessage(null);
-
     try {
       const response = await axios.patch("/api/subscription", {
         action: sub?.status === "ACTIVE" ? "pause" : "resume",
@@ -183,7 +212,6 @@ export default function MonthlyGivingPage() {
   async function cancelPlan() {
     setActionLoading(true);
     setMessage(null);
-
     try {
       const response = await axios.delete("/api/subscription");
       if (!response.data?.success) {
@@ -264,9 +292,7 @@ export default function MonthlyGivingPage() {
         ) : (
           <>
             <Card className="overflow-hidden">
-              <div
-                className={`${sub.status === "ACTIVE" ? "bg-primary" : sub.status === "PAUSED" ? "bg-yellow-600" : "bg-destructive"} p-7 text-white`}
-              >
+              <div className="bg-primary p-7 text-white">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <p className="text-sm text-green-200">
@@ -276,7 +302,6 @@ export default function MonthlyGivingPage() {
                       ₹{sub.amount} / month
                     </h2>
                   </div>
-
                   <Badge
                     variant={sub.status === "ACTIVE" ? "success" : "warning"}
                     className="bg-white/10 text-white"
@@ -290,13 +315,15 @@ export default function MonthlyGivingPage() {
                 <div>
                   <p className="text-sm text-slate-500">Next payment</p>
                   <p className="mt-1 font-semibold">
-                    {sub.status === "ACTIVE" ? sub.nextPaymentDate : "Paused/Cancelled"}
+                    {sub.status === "ACTIVE"
+                      ? (sub.nextPaymentDate ?? "Pending")
+                      : "—"}
                   </p>
-
                   <p className="mt-5 text-sm text-slate-500">Started</p>
-                  <p className="mt-1 font-semibold">{sub.startedAt}</p>
+                  <p className="mt-1 font-semibold">
+                    {sub.startedAt ?? "Awaiting first payment"}
+                  </p>
                 </div>
-
                 <div>
                   <p className="text-sm text-slate-500">Payment provider</p>
                   <p className="mt-1 font-semibold">Razorpay</p>
@@ -308,31 +335,12 @@ export default function MonthlyGivingPage() {
               <CardHeader>
                 <CardTitle>Manage subscription</CardTitle>
                 <CardDescription>
-                  Changes should be synced with Razorpay from your backend.
+                  To change your monthly amount, cancel this plan and start a
+                  new one.
                 </CardDescription>
               </CardHeader>
 
               <CardContent className="space-y-5">
-                <div>
-                  <Label htmlFor="amount">Monthly amount</Label>
-                  <div className="flex max-w-sm gap-2">
-                    <Input
-                      id="amount"
-                      type="number"
-                      min="100"
-                      value={amountInput}
-                      onChange={(e) => setAmountInput(e.target.value)}
-                    />
-                    <Button
-                      variant="outline"
-                      disabled={actionLoading}
-                      onClick={updateAmount}
-                    >
-                      Update
-                    </Button>
-                  </div>
-                </div>
-
                 {message && (
                   <p
                     className={`text-sm ${
@@ -346,23 +354,25 @@ export default function MonthlyGivingPage() {
                 )}
 
                 <div className="flex flex-col gap-3 sm:flex-row">
-                  <Button
-                    variant="outline"
-                    disabled={actionLoading}
-                    onClick={toggleActive}
-                  >
-                    {sub.status === "ACTIVE" ? (
-                      <>
-                        <PauseIcon size={17} />
-                        Pause
-                      </>
-                    ) : (
-                      <>
-                        <PlayIcon size={17} />
-                        Resume
-                      </>
-                    )}
-                  </Button>
+                  {sub.status !== "HALTED" && sub.status !== "CREATED" && (
+                    <Button
+                      variant="outline"
+                      disabled={actionLoading}
+                      onClick={toggleActive}
+                    >
+                      {sub.status === "ACTIVE" ? (
+                        <>
+                          <PauseIcon size={17} />
+                          Pause
+                        </>
+                      ) : (
+                        <>
+                          <PlayIcon size={17} />
+                          Resume
+                        </>
+                      )}
+                    </Button>
+                  )}
 
                   <Button
                     variant="destructive"
@@ -380,10 +390,7 @@ export default function MonthlyGivingPage() {
 
         <div className="flex gap-3 rounded-2xl bg-slate-100 p-5 text-sm text-slate-600">
           <ShieldCheckIcon className="shrink-0" size={19} />
-          <p>
-            Recurring payments require proper Razorpay subscription setup,
-            webhook verification and secure server-side handling.
-          </p>
+          <p>Payments are securely processed and verified by Razorpay.</p>
         </div>
       </div>
     </AppShell>

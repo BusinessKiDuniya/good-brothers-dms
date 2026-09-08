@@ -4,9 +4,8 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth.config";
 import dbConnect from "@/lib/db";
 import { Subscription } from "@/models/Subscription";
-import { Donation } from "@/models/Donation";
-import { addOneMonth, formatSubscription } from "@/lib/subscription";
-import { generateDonationId } from "@/lib/donation";
+import { razorpay } from "@/lib/razorpay";
+import { formatSubscription } from "@/lib/subscription";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -22,93 +21,13 @@ export async function GET() {
 
   const sub = await Subscription.findOne({ userId: session.user.id }).lean();
 
-  return NextResponse.json({
-    success: true,
-    subscription: sub ? formatSubscription(sub) : null,
-  });
-}
-
-export async function POST(request: NextRequest) {
-  try {
-    const session = await getServerSession(authOptions);
-
-    if (!session?.user?.id) {
-      return NextResponse.json(
-        { success: false, message: "Unauthorized" },
-        { status: 401 },
-      );
-    }
-
-    const body = await request.json();
-    const amount = Number(body.amount);
-
-    if (!Number.isFinite(amount) || amount < 100) {
-      return NextResponse.json(
-        { success: false, message: "Minimum monthly amount is ₹100." },
-        { status: 400 },
-      );
-    }
-
-    await dbConnect();
-
-    const existing = await Subscription.findOne({ userId: session.user.id });
-
-    if (existing && existing.status !== "CANCELLED") {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "You already have an active or paused monthly plan.",
-        },
-        { status: 409 },
-      );
-    }
-
-    const now = new Date();
-    const nextPaymentDate = addOneMonth(now);
-
-    let sub;
-
-    // TODO: replace with real Razorpay subscription creation before going live.
-    if (existing) {
-      existing.amount = amount;
-      existing.status = "ACTIVE";
-      existing.startedAt = now;
-      existing.nextPaymentDate = nextPaymentDate;
-      sub = await existing.save();
-    } else {
-      sub = await Subscription.create({
-        userId: session.user.id,
-        amount,
-        status: "ACTIVE",
-        startedAt: now,
-        nextPaymentDate,
-      });
-    }
-
-    // Record the first charge as a regular donation so history/totals stay consistent.
-    // TODO: future recurring charges should be created by a billing webhook/cron, not here.
-    await Donation.create({
-      donationId: await generateDonationId(),
-      userId: session.user.id,
-      amount,
-      type: "MONTHLY",
-      status: "SUCCESS",
-      project: "Monthly Giving",
-      payment: "Razorpay",
-    });
-
-    return NextResponse.json({
-      success: true,
-      subscription: formatSubscription(sub),
-    });
-  } catch (error) {
-    console.error("Create subscription error:", error);
-
-    return NextResponse.json(
-      { success: false, message: "Unable to start monthly giving." },
-      { status: 500 },
-    );
+  // CANCELLED is treated as "no plan" so the UI shows the start-plan screen,
+  // not a dead management screen for a subscription that no longer exists at Razorpay.
+  if (!sub || sub.status === "CANCELLED") {
+    return NextResponse.json({ success: true, subscription: null });
   }
+
+  return NextResponse.json({ success: true, subscription: formatSubscription(sub) });
 }
 
 export async function PATCH(request: NextRequest) {
@@ -122,56 +41,47 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const body = await request.json();
+    const { action } = await request.json();
+
     await dbConnect();
 
     const sub = await Subscription.findOne({ userId: session.user.id });
 
-    if (!sub || sub.status === "CANCELLED") {
+    if (!sub || sub.status === "CANCELLED" || !sub.razorpaySubscriptionId) {
       return NextResponse.json(
         { success: false, message: "No active subscription found." },
         { status: 404 },
       );
     }
 
-    if (body.amount !== undefined) {
-      const amount = Number(body.amount);
-      if (!Number.isFinite(amount) || amount < 100) {
-        return NextResponse.json(
-          { success: false, message: "Minimum monthly amount is ₹100." },
-          { status: 400 },
-        );
-      }
-      sub.amount = amount;
-    }
-
-    if (body.action === "pause") {
+    if (action === "pause") {
       if (sub.status !== "ACTIVE") {
         return NextResponse.json(
           { success: false, message: "Only an active subscription can be paused." },
           { status: 400 },
         );
       }
+      await razorpay.subscriptions.pause(sub.razorpaySubscriptionId, { pause_at: "now" });
       sub.status = "PAUSED";
-    }
-
-    if (body.action === "resume") {
+      await sub.save();
+    } else if (action === "resume") {
       if (sub.status !== "PAUSED") {
         return NextResponse.json(
           { success: false, message: "Only a paused subscription can be resumed." },
           { status: 400 },
         );
       }
+      await razorpay.subscriptions.resume(sub.razorpaySubscriptionId, { resume_at: "now" });
       sub.status = "ACTIVE";
-      sub.nextPaymentDate = addOneMonth(new Date());
+      await sub.save();
+    } else {
+      return NextResponse.json(
+        { success: false, message: "Unknown action." },
+        { status: 400 },
+      );
     }
 
-    await sub.save();
-
-    return NextResponse.json({
-      success: true,
-      subscription: formatSubscription(sub),
-    });
+    return NextResponse.json({ success: true, subscription: formatSubscription(sub) });
   } catch (error) {
     console.error("Update subscription error:", error);
 
@@ -183,29 +93,47 @@ export async function PATCH(request: NextRequest) {
 }
 
 export async function DELETE() {
-  const session = await getServerSession(authOptions);
+  try {
+    const session = await getServerSession(authOptions);
 
-  if (!session?.user?.id) {
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { success: false, message: "Unauthorized" },
+        { status: 401 },
+      );
+    }
+
+    await dbConnect();
+
+    const sub = await Subscription.findOne({ userId: session.user.id });
+
+    if (!sub || sub.status === "CANCELLED") {
+      return NextResponse.json(
+        { success: false, message: "No active subscription found." },
+        { status: 404 },
+      );
+    }
+
+    if (sub.razorpaySubscriptionId) {
+      try {
+        await razorpay.subscriptions.cancel(sub.razorpaySubscriptionId, false);
+      } catch (err: any) {
+        // If Razorpay already considers it cancelled/completed, don't block our own state change
+        if (err?.statusCode !== 400) throw err;
+      }
+    }
+
+    sub.status = "CANCELLED";
+    sub.nextPaymentDate = undefined;
+    await sub.save();
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("Cancel subscription error:", error);
+
     return NextResponse.json(
-      { success: false, message: "Unauthorized" },
-      { status: 401 },
+      { success: false, message: "Unable to cancel subscription." },
+      { status: 500 },
     );
   }
-
-  await dbConnect();
-
-  const sub = await Subscription.findOne({ userId: session.user.id });
-
-  if (!sub || sub.status === "CANCELLED") {
-    return NextResponse.json(
-      { success: false, message: "No active subscription found." },
-      { status: 404 },
-    );
-  }
-
-  sub.status = "CANCELLED";
-  sub.nextPaymentDate = undefined;
-  await sub.save();
-
-  return NextResponse.json({ success: true });
 }

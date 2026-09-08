@@ -3,10 +3,11 @@ import crypto from "crypto";
 
 import dbConnect from "@/lib/db";
 import { Donation } from "@/models/Donation";
+import { Subscription } from "@/models/Subscription";
+import { generateDonationId } from "@/lib/donation";
 
 export async function POST(request: NextRequest) {
   try {
-    // Must read the raw body — signature is computed over exact bytes
     const rawBody = await request.text();
     const signature = request.headers.get("x-razorpay-signature");
 
@@ -33,9 +34,9 @@ export async function POST(request: NextRequest) {
 
     await dbConnect();
 
+    // --- One-time donations ---
     if (event.event === "payment.captured") {
       const payment = event.payload.payment.entity;
-
       await Donation.findOneAndUpdate(
         { razorpayOrderId: payment.order_id, status: "PENDING" },
         { status: "SUCCESS", razorpayPaymentId: payment.id },
@@ -44,19 +45,84 @@ export async function POST(request: NextRequest) {
 
     if (event.event === "payment.failed") {
       const payment = event.payload.payment.entity;
-
       await Donation.findOneAndUpdate(
         { razorpayOrderId: payment.order_id, status: "PENDING" },
         { status: "FAILED" },
       );
     }
 
-    // Always 200 quickly so Razorpay doesn't retry unnecessarily
+    // --- Monthly giving subscriptions ---
+    if (
+      event.event === "subscription.activated" ||
+      event.event === "subscription.charged"
+    ) {
+      const sub = event.payload.subscription.entity;
+      const payment = event.payload.payment?.entity;
+
+      const dbSub = await Subscription.findOne({
+        razorpaySubscriptionId: sub.id,
+      });
+
+      if (dbSub) {
+        dbSub.status = "ACTIVE";
+        if (sub.current_end)
+          dbSub.nextPaymentDate = new Date(sub.current_end * 1000);
+        if (!dbSub.startedAt) dbSub.startedAt = new Date();
+
+        // Record a Donation for this billing cycle, once per unique payment id
+        if (payment && dbSub.lastChargedPaymentId !== payment.id) {
+          await Donation.create({
+            donationId: await generateDonationId(),
+            userId: dbSub.userId,
+            amount: payment.amount / 100,
+            type: "MONTHLY",
+            status: "SUCCESS",
+            project: "Monthly Giving",
+            payment: "Razorpay",
+            razorpayPaymentId: payment.id,
+          });
+          dbSub.lastChargedPaymentId = payment.id;
+        }
+
+        await dbSub.save();
+      }
+    }
+
+    if (event.event === "subscription.halted") {
+      const sub = event.payload.subscription.entity;
+      await Subscription.findOneAndUpdate(
+        { razorpaySubscriptionId: sub.id },
+        { status: "HALTED" },
+      );
+    }
+
+    if (event.event === "subscription.cancelled") {
+      const sub = event.payload.subscription.entity;
+      await Subscription.findOneAndUpdate(
+        { razorpaySubscriptionId: sub.id },
+        { status: "CANCELLED", nextPaymentDate: null },
+      );
+    }
+
+    if (event.event === "subscription.paused") {
+      const sub = event.payload.subscription.entity;
+      await Subscription.findOneAndUpdate(
+        { razorpaySubscriptionId: sub.id },
+        { status: "PAUSED" },
+      );
+    }
+
+    if (event.event === "subscription.resumed") {
+      const sub = event.payload.subscription.entity;
+      await Subscription.findOneAndUpdate(
+        { razorpaySubscriptionId: sub.id },
+        { status: "ACTIVE" },
+      );
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Razorpay webhook error:", error);
-    // Still return 200 for parse errors on unrelated event types to avoid retry storms,
-    // but 500 here if it's a genuine failure you want Razorpay to retry:
     return NextResponse.json({ success: false }, { status: 500 });
   }
 }

@@ -174,7 +174,14 @@ export const authOptions: AuthOptions = {
     },
 
     // JWT
-    async jwt({ token, user, account }) {
+    async jwt({ token, user, account, trigger, session }) {
+      if (trigger === "update" && session) {
+        if (session.name !== undefined) token.name = session.name;
+        if (session.mobile !== undefined) token.mobile = session.mobile;
+        if (session.role !== undefined) token.role = session.role;
+        return token;
+      }
+
       // Initial mobile login
       if (user && account?.provider === "credentials") {
         token.id = user.id;

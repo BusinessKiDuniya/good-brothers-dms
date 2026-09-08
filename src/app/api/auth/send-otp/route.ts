@@ -6,7 +6,13 @@ import { User } from "@/models/User";
 import { OtpVerification } from "@/models/OtpVerification";
 import { OtpRequestLog } from "@/models/OtpRequestLog";
 import { sendOtpSms } from "@/lib/sms";
-import { IP_WINDOW_MINUTES, MAX_PER_IP_PER_WINDOW, MAX_PER_MOBILE_PER_WINDOW, MOBILE_WINDOW_MINUTES, RESEND_COOLDOWN_SECONDS } from "@/lib/const";
+import {
+  IP_WINDOW_MINUTES,
+  MAX_PER_IP_PER_WINDOW,
+  MAX_PER_MOBILE_PER_WINDOW,
+  MOBILE_WINDOW_MINUTES,
+  RESEND_COOLDOWN_SECONDS,
+} from "@/lib/const";
 
 function getClientIp(request: NextRequest) {
   const forwardedFor = request.headers.get("x-forwarded-for");
@@ -82,14 +88,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          message: "Too many OTP requests for this number. Please try again later.",
+          message:
+            "Too many OTP requests for this number. Please try again later.",
         },
         { status: 429 },
       );
     }
 
     // Per-IP limit within a rolling window (catches abuse across many numbers)
-    const ipWindowStart = new Date(now.getTime() - IP_WINDOW_MINUTES * 60 * 1000);
+    const ipWindowStart = new Date(
+      now.getTime() - IP_WINDOW_MINUTES * 60 * 1000,
+    );
 
     const ipCount = await OtpRequestLog.countDocuments({
       ip,
@@ -100,7 +109,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          message: "Too many requests from this device. Please try again later.",
+          message:
+            "Too many requests from this device. Please try again later.",
         },
         { status: 429 },
       );
@@ -117,16 +127,24 @@ export async function POST(request: NextRequest) {
     const otpHash = crypto.createHash("sha256").update(otp).digest("hex");
 
     // Remove old OTP
-    await OtpVerification.deleteMany({
-      mobile: cleanMobile,
-    });
+    await OtpVerification.deleteMany({ mobile: cleanMobile });
 
     // Store new OTP
-    await OtpVerification.create({
+    const otpRecord = await OtpVerification.create({
       mobile: cleanMobile,
       otpHash,
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
     });
+
+    try {
+      await sendOtpSms(cleanMobile, otp);
+    } catch (err) {
+      await OtpVerification.deleteOne({ _id: otpRecord._id });
+      return NextResponse.json(
+        { success: false, message: "Unable to send OTP. Please try again." },
+        { status: 502 },
+      );
+    }
 
     // Log this send attempt for rate limiting
     await OtpRequestLog.create({ mobile: cleanMobile, ip });

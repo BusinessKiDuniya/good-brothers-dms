@@ -15,19 +15,14 @@ const SubscriptionSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["ACTIVE", "PAUSED", "CANCELLED"],
-      default: "ACTIVE",
+      enum: ["CREATED", "ACTIVE", "PAUSED", "CANCELLED", "HALTED"],
+      default: "CREATED",
     },
-    razorpaySubscriptionId: {
-      type: String,
-    },
-    startedAt: {
-      type: Date,
-      default: Date.now,
-    },
-    nextPaymentDate: {
-      type: Date,
-    },
+    razorpayPlanId: { type: String },
+    razorpaySubscriptionId: { type: String },
+    lastChargedPaymentId: { type: String },
+    startedAt: { type: Date },
+    nextPaymentDate: { type: Date },
   },
   { timestamps: true },
 );

@@ -6,6 +6,7 @@ import dbConnect from "@/lib/db";
 import { Donation } from "@/models/Donation";
 import { razorpay } from "@/lib/razorpay";
 import { generateDonationId } from "@/lib/donation";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
   try {
@@ -33,6 +34,22 @@ export async function POST(request: NextRequest) {
     }
 
     await dbConnect();
+
+    const allowed = await checkRateLimit(
+      `donation-order:${session.user.id}`,
+      10,
+      10,
+    );
+
+    if (!allowed) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Too many payment attempts. Please wait a few minutes.",
+        },
+        { status: 429 },
+      );
+    }
 
     const donationId = await generateDonationId();
 
