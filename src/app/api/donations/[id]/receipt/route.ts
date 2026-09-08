@@ -9,10 +9,11 @@ import { User } from "@/models/User";
 
 const NGO_NAME = "Good Brothers Trust";
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } },
-) {
+type RouteContext = {
+  params: Promise<{ id: string }>;
+};
+
+export async function GET(request: NextRequest, context: RouteContext) {
   const session = await getServerSession(authOptions);
 
   if (!session?.user?.id) {
@@ -24,8 +25,10 @@ export async function GET(
 
   await dbConnect();
 
+  const { id } = await context.params;
+
   const donation = await Donation.findOne({
-    donationId: params.id,
+    donationId: id,
     userId: session.user.id,
   }).lean();
 
