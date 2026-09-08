@@ -9,6 +9,7 @@ declare module "next-auth" {
       id: string;
       mobile?: string | null;
       role?: string;
+      createdAt?: string;
     } & DefaultSession["user"];
   }
 
@@ -16,6 +17,7 @@ declare module "next-auth" {
     id: string;
     mobile?: string | null;
     role?: string;
+    createdAt?: string;
   }
 }
 
@@ -27,5 +29,6 @@ declare module "next-auth/jwt" {
     image?: string | null;
     mobile?: string | null;
     role?: string;
+    createdAt?: string;
   }
 }

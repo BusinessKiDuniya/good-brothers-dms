@@ -102,6 +102,7 @@ export const authOptions: AuthOptions = {
           mobile: user.mobile,
           image: user.image ?? null,
           role: user.role ?? "user",
+          createdAt: user.createdAt?.toISOString(),
         };
       },
     }),
@@ -182,6 +183,7 @@ export const authOptions: AuthOptions = {
         token.mobile = user.mobile;
         token.image = user.image;
         token.role = user.role ?? "user";
+        token.createdAt = user.createdAt;
       }
 
       // Initial Google login
@@ -206,6 +208,7 @@ export const authOptions: AuthOptions = {
           token.mobile = dbUser.mobile;
           token.image = dbUser.image;
           token.role = dbUser.role ?? "user";
+          token.createdAt = dbUser.createdAt?.toISOString();
         }
       }
 
@@ -221,6 +224,7 @@ export const authOptions: AuthOptions = {
         session.user.mobile = token.mobile;
         session.user.image = token.image;
         session.user.role = token.role;
+        session.user.createdAt = token.createdAt;
       }
 
       return session;
