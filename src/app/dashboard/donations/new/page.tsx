@@ -114,14 +114,14 @@ export default function NewDonationPage() {
             );
 
             if (verifyResponse.data?.success) {
-              router.push(`/donations/${verifyResponse.data.donation.id}`);
+              router.push(`/dashboard/donations/${verifyResponse.data.donation.id}`);
             } else {
               // Payment likely succeeded on Razorpay's side but our verification
               // hiccuped — the webhook will still resolve it correctly.
-              router.push(`/donations/${donationId}`);
+              router.push(`/dashboard/donations/${donationId}`);
             }
           } catch (err) {
-            router.push(`/donations/${donationId}`);
+            router.push(`/dashboard/donations/${donationId}`);
           }
         },
         modal: {

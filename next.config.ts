@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+   allowedDevOrigins: [
+    "imminent-setting-isotope.ngrok-free.dev",
+  ],
 };
 
 export default nextConfig;

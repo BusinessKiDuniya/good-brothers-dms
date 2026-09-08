@@ -155,7 +155,7 @@ export default function HomePage() {
               ) : (
                 donations.slice(0, 4).map((d) => (
                   <Link
-                    href={`/donations/${d.id}`}
+                    href={`/dashboard/donations/${d.id}`}
                     key={d.id}
                     className="flex items-center justify-between rounded-xl border border-slate-100 p-4 hover:bg-slate-50"
                   >
