@@ -22,6 +22,18 @@ const OtpVerificationSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+
+    purpose: {
+      type: String,
+      enum: ["login", "profile_update"],
+      default: "login",
+    },
+
+     userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: false,
+    },
   },
   {
     timestamps: true,

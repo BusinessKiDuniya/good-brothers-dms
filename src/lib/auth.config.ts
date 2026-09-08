@@ -58,6 +58,7 @@ export const authOptions: AuthOptions = {
         // Find valid OTP
         const record = await OtpVerification.findOne({
           mobile,
+          purpose: "login",
           expiresAt: { $gt: new Date() },
         });
 
