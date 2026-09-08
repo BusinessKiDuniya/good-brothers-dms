@@ -144,16 +144,16 @@ export default function DonationDetailsPage() {
 
             {donation.status === "SUCCESS" && (
               <div className="pt-3">
-                <Button className="w-full sm:w-auto">
-                  <Link
-                    href={`/api/donations/${donation.id}/receipt`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
+                <Link
+                  href={`/api/donations/${donation.id}/receipt`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <Button className="w-full sm:w-auto">
                     <DownloadIcon size={17} />
                     Download Receipt
-                  </Link>
-                </Button>
+                  </Button>
+                </Link>
               </div>
             )}
           </CardContent>
