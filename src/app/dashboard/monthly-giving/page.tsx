@@ -1,15 +1,16 @@
 "use client";
 
-import { useState } from "react";
-
+import { useEffect, useState } from "react";
 import {
   PauseIcon,
   PlayIcon,
   ShieldCheckIcon,
   XCircleIcon,
+  HeartIcon,
 } from "@phosphor-icons/react";
-import { AppShell } from "@/components/dashboard/app-shell";
+import axios from "axios";
 
+import { AppShell } from "@/components/dashboard/app-shell";
 import {
   Card,
   CardContent,
@@ -17,124 +18,368 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-
 import { Button } from "@/components/ui/button";
-
 import { Badge } from "@/components/ui/badge";
-
 import { Input } from "@/components/ui/input";
-
 import { Label } from "@/components/ui/label";
 
-export default function MonthlyGivingPage() {
-  const [active, setActive] = useState(true);
+type Subscription = {
+  amount: number;
+  status: "ACTIVE" | "PAUSED" | "CANCELLED";
+  startedAt: string;
+  nextPaymentDate: string | null;
+  razorpaySubscriptionId: string | null;
+};
 
-  const [amount, setAmount] = useState("500");
+export default function MonthlyGivingPage() {
+  const [sub, setSub] = useState<Subscription | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [amountInput, setAmountInput] = useState("500");
+  const [actionLoading, setActionLoading] = useState(false);
+  const [message, setMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+
+  async function load() {
+    try {
+      const response = await axios.get("/api/subscription");
+      if (response.data?.success) {
+        setSub(response.data.subscription);
+        if (response.data.subscription) {
+          setAmountInput(String(response.data.subscription.amount));
+        }
+      }
+    } catch (error) {
+      console.error("Failed to load subscription:", error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchSubscription() {
+      try {
+        const response = await axios.get("/api/subscription");
+
+        if (cancelled) return;
+
+        if (response.data?.success) {
+          const subscription = response.data.subscription;
+
+          setSub(subscription);
+
+          if (subscription) {
+            setAmountInput(String(subscription.amount));
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to load subscription:", error);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    fetchSubscription();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function startPlan() {
+    const amount = Number(amountInput);
+    if (!Number.isFinite(amount) || amount < 100) {
+      setMessage({ type: "error", text: "Minimum monthly amount is ₹100." });
+      return;
+    }
+
+    setActionLoading(true);
+    setMessage(null);
+
+    try {
+      const response = await axios.post("/api/subscription", { amount });
+      if (!response.data?.success) {
+        setMessage({
+          type: "error",
+          text: response.data?.message || "Unable to start monthly giving.",
+        });
+        return;
+      }
+      setSub(response.data.subscription);
+      setMessage({ type: "success", text: "Monthly giving started!" });
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        setMessage({
+          type: "error",
+          text:
+            error.response?.data?.message || "Unable to start monthly giving.",
+        });
+      } else {
+        setMessage({ type: "error", text: "Unable to start monthly giving." });
+      }
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function updateAmount() {
+    const amount = Number(amountInput);
+    if (!Number.isFinite(amount) || amount < 100) {
+      setMessage({ type: "error", text: "Minimum monthly amount is ₹100." });
+      return;
+    }
+
+    setActionLoading(true);
+    setMessage(null);
+
+    try {
+      const response = await axios.patch("/api/subscription", { amount });
+      if (!response.data?.success) {
+        setMessage({
+          type: "error",
+          text: response.data?.message || "Unable to update amount.",
+        });
+        return;
+      }
+      setSub(response.data.subscription);
+      setMessage({ type: "success", text: "Amount updated." });
+    } catch (error) {
+      setMessage({ type: "error", text: "Unable to update amount." });
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function toggleActive() {
+    setActionLoading(true);
+    setMessage(null);
+
+    try {
+      const response = await axios.patch("/api/subscription", {
+        action: sub?.status === "ACTIVE" ? "pause" : "resume",
+      });
+      if (!response.data?.success) {
+        setMessage({
+          type: "error",
+          text: response.data?.message || "Unable to update subscription.",
+        });
+        return;
+      }
+      setSub(response.data.subscription);
+    } catch (error) {
+      setMessage({ type: "error", text: "Unable to update subscription." });
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function cancelPlan() {
+    setActionLoading(true);
+    setMessage(null);
+
+    try {
+      const response = await axios.delete("/api/subscription");
+      if (!response.data?.success) {
+        setMessage({
+          type: "error",
+          text: response.data?.message || "Unable to cancel subscription.",
+        });
+        return;
+      }
+      setSub(null);
+      setAmountInput("500");
+      setMessage({ type: "success", text: "Monthly giving cancelled." });
+    } catch (error) {
+      setMessage({ type: "error", text: "Unable to cancel subscription." });
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <AppShell>
+        <p className="text-slate-500">Loading...</p>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell>
       <div className="mx-auto max-w-4xl space-y-6">
         <div>
           <h1 className="text-3xl font-bold">Monthly Giving</h1>
-
           <p className="mt-1 text-slate-500">
             Create consistent impact with an automatic monthly contribution.
           </p>
         </div>
 
-        <Card className="overflow-hidden">
-          <div className="bg-primary p-7 text-white">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-sm text-green-200">Current subscription</p>
-
-                <h2 className="mt-1 text-3xl font-bold">₹{amount} / month</h2>
+        {!sub ? (
+          <Card>
+            <CardHeader>
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-green-50 text-green-700">
+                <HeartIcon fill="currentColor" size={20} />
               </div>
+              <CardTitle className="mt-2">Start a monthly plan</CardTitle>
+              <CardDescription>
+                Choose an amount to give automatically every month.
+              </CardDescription>
+            </CardHeader>
 
-              <Badge
-                variant={active ? "success" : "warning"}
-                className="bg-white/10 text-white"
-              >
-                {active ? "ACTIVE" : "PAUSED"}
-              </Badge>
-            </div>
-          </div>
-
-          <CardContent className="grid gap-6 p-6 md:grid-cols-2">
-            <div>
-              <p className="text-sm text-slate-500">Next payment</p>
-
-              <p className="mt-1 font-semibold">05 October 2026</p>
-
-              <p className="mt-5 text-sm text-slate-500">Started</p>
-
-              <p className="mt-1 font-semibold">05 September 2026</p>
-            </div>
-
-            <div>
-              <p className="text-sm text-slate-500">Subscription ID</p>
-
-              <p className="mt-1 font-semibold">SUB_8H7D92K</p>
-
-              <p className="mt-5 text-sm text-slate-500">Payment provider</p>
-
-              <p className="mt-1 font-semibold">Razorpay</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Manage subscription</CardTitle>
-
-            <CardDescription>
-              Changes should be synced with Razorpay from your backend.
-            </CardDescription>
-          </CardHeader>
-
-          <CardContent className="space-y-5">
-            <div>
-              <Label htmlFor="amount">Monthly amount</Label>
-
-              <div className="flex max-w-sm gap-2">
+            <CardContent className="space-y-5">
+              <div>
+                <Label htmlFor="startAmount">Monthly amount</Label>
                 <Input
-                  id="amount"
+                  id="startAmount"
                   type="number"
                   min="100"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  value={amountInput}
+                  onChange={(e) => setAmountInput(e.target.value)}
+                  className="max-w-sm"
                 />
-
-                <Button variant="outline">Update</Button>
               </div>
-            </div>
 
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <Button variant="outline" onClick={() => setActive(!active)}>
-                {active ? (
-                  <>
-                    <PauseIcon size={17} />
-                    Pause
-                  </>
-                ) : (
-                  <>
-                    <PlayIcon size={17} />
-                    Resume
-                  </>
+              {message && (
+                <p
+                  className={`text-sm ${
+                    message.type === "error" ? "text-red-600" : "text-green-700"
+                  }`}
+                >
+                  {message.text}
+                </p>
+              )}
+
+              <Button disabled={actionLoading} onClick={startPlan}>
+                {actionLoading ? "Starting..." : "Start monthly giving"}
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <>
+            <Card className="overflow-hidden">
+              <div
+                className={`${sub.status === "ACTIVE" ? "bg-primary" : sub.status === "PAUSED" ? "bg-yellow-600" : "bg-destructive"} p-7 text-white`}
+              >
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm text-green-200">
+                      Current subscription
+                    </p>
+                    <h2 className="mt-1 text-3xl font-bold">
+                      ₹{sub.amount} / month
+                    </h2>
+                  </div>
+
+                  <Badge
+                    variant={sub.status === "ACTIVE" ? "success" : "warning"}
+                    className="bg-white/10 text-white"
+                  >
+                    {sub.status}
+                  </Badge>
+                </div>
+              </div>
+
+              <CardContent className="grid gap-6 p-6 md:grid-cols-2">
+                <div>
+                  <p className="text-sm text-slate-500">Next payment</p>
+                  <p className="mt-1 font-semibold">
+                    {sub.status === "ACTIVE" ? sub.nextPaymentDate : "Paused/Cancelled"}
+                  </p>
+
+                  <p className="mt-5 text-sm text-slate-500">Started</p>
+                  <p className="mt-1 font-semibold">{sub.startedAt}</p>
+                </div>
+
+                <div>
+                  <p className="text-sm text-slate-500">Payment provider</p>
+                  <p className="mt-1 font-semibold">Razorpay</p>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Manage subscription</CardTitle>
+                <CardDescription>
+                  Changes should be synced with Razorpay from your backend.
+                </CardDescription>
+              </CardHeader>
+
+              <CardContent className="space-y-5">
+                <div>
+                  <Label htmlFor="amount">Monthly amount</Label>
+                  <div className="flex max-w-sm gap-2">
+                    <Input
+                      id="amount"
+                      type="number"
+                      min="100"
+                      value={amountInput}
+                      onChange={(e) => setAmountInput(e.target.value)}
+                    />
+                    <Button
+                      variant="outline"
+                      disabled={actionLoading}
+                      onClick={updateAmount}
+                    >
+                      Update
+                    </Button>
+                  </div>
+                </div>
+
+                {message && (
+                  <p
+                    className={`text-sm ${
+                      message.type === "error"
+                        ? "text-red-600"
+                        : "text-green-700"
+                    }`}
+                  >
+                    {message.text}
+                  </p>
                 )}
-              </Button>
 
-              <Button variant="destructive">
-                <XCircleIcon size={17} />
-                Cancel subscription
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <Button
+                    variant="outline"
+                    disabled={actionLoading}
+                    onClick={toggleActive}
+                  >
+                    {sub.status === "ACTIVE" ? (
+                      <>
+                        <PauseIcon size={17} />
+                        Pause
+                      </>
+                    ) : (
+                      <>
+                        <PlayIcon size={17} />
+                        Resume
+                      </>
+                    )}
+                  </Button>
+
+                  <Button
+                    variant="destructive"
+                    disabled={actionLoading}
+                    onClick={cancelPlan}
+                  >
+                    <XCircleIcon size={17} />
+                    Cancel subscription
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </>
+        )}
 
         <div className="flex gap-3 rounded-2xl bg-slate-100 p-5 text-sm text-slate-600">
           <ShieldCheckIcon className="shrink-0" size={19} />
-
           <p>
             Recurring payments require proper Razorpay subscription setup,
             webhook verification and secure server-side handling.
